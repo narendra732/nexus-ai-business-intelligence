@@ -1,0 +1,29 @@
+@'
+# Python environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local vector database
+chroma_db/
+
+# Private uploaded reports
+data/uploaded_reports/
+uploads/
+
+# Backup datasets
+data/*backup*.csv
+
+# Secrets
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Operating system files
+Thumbs.db
+.DS_Store
+'@ | Set-Content -Encoding utf8 .gitignore

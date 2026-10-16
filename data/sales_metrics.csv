@@ -1,0 +1,3 @@
+Quarter,Revenue_USD,Source_File,Source_Page,Evidence
+Q3,480000.0,sample_report.txt,1,"Total revenue for Q3 was $480,000, compared with $520,000 in Q2. Revenue declined by approximately 7.7 percent."
+Q2,520000.0,sample_report.txt,1,"Total revenue for Q3 was $480,000, compared with $520,000 in Q2. Revenue declined by approximately 7.7 percent."
