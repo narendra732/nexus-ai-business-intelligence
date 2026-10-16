@@ -1,0 +1,7 @@
+streamlit>=1.40,<2
+chromadb>=0.6,<2
+google-genai>=1.0.0,<2
+ollama>=0.4,<1
+pypdf>=5,<7
+pandas>=2.2,<4
+plotly>=5.20,<7

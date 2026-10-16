@@ -1,20 +1,15 @@
-@'
-# Python environments
+# Python environments and cache
 .venv/
 venv/
-
-# Python cache
 __pycache__/
 *.py[cod]
 
-# Local vector database
+# Local Chroma database
 chroma_db/
 
-# Private uploaded reports
+# Uploaded files and backups
 data/uploaded_reports/
 uploads/
-
-# Backup datasets
 data/*backup*.csv
 
 # Secrets
@@ -23,7 +18,7 @@ data/*backup*.csv
 !.env.example
 .streamlit/secrets.toml
 
-# Operating system files
+# OS/editor files
 Thumbs.db
 .DS_Store
-'@ | Set-Content -Encoding utf8 .gitignore
+.vscode/

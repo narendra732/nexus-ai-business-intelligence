@@ -2,7 +2,8 @@
 from pathlib import Path
 
 import chromadb
-import ollama
+
+from cloud_ai import embed_texts as backend_embed_texts, generate_answer
 
 
 # ==================================================
@@ -56,15 +57,13 @@ def chunk_text(text, chunk_size=120, overlap=25):
 # 4. CREATE EMBEDDINGS
 # ==================================================
 
-def embed_texts(texts):
-    """Convert text into numerical embeddings."""
-
-    response = ollama.embed(
-        model=EMBED_MODEL,
-        input=texts,
+def embed_texts(texts, task_type="RETRIEVAL_DOCUMENT"):
+    """Create embeddings using Gemini API when configured, otherwise Ollama."""
+    return backend_embed_texts(
+        texts,
+        local_model=EMBED_MODEL,
+        task_type=task_type,
     )
-
-    return response["embeddings"]
 
 
 # ==================================================
@@ -135,7 +134,7 @@ def answer_question(question, top_k=3):
         return
 
     # Embed the user's question
-    question_embedding = embed_texts([question])[0]
+    question_embedding = embed_texts([question], task_type="RETRIEVAL_QUERY")[0]
 
     # Retrieve the most relevant document chunks
     results = collection.query(
@@ -208,29 +207,21 @@ Rules:
 8. Keep answers concise and professional.
 """
 
-    # Generate the answer locally with Ollama
-    response = ollama.chat(
-        model=CHAT_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Retrieved evidence:\n"
-                    f"{context}\n\n"
-                    f"Question: {question}\n\n"
-                    "Answer using only the evidence above."
-                ),
-            },
-        ],
+    # Use hosted Gemini when GEMINI_API_KEY is set; otherwise local Ollama.
+    answer = generate_answer(
+        system_prompt,
+        (
+            "Retrieved evidence:\n"
+            f"{context}\n\n"
+            f"Question: {question}\n\n"
+            "Answer using only the evidence above."
+        ),
+        local_model=CHAT_MODEL,
     )
 
     print("\nAI BUSINESS ANALYST")
     print("-" * 55)
-    print(response["message"]["content"])
+    print(answer)
     print("-" * 55)
 
 

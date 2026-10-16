@@ -2,11 +2,17 @@
 from pathlib import Path
 import hashlib
 import html
+import os
 
 import chromadb
-import ollama
 import streamlit as st
 from pypdf import PdfReader
+
+from cloud_ai import (
+    embed_texts as backend_embed_texts,
+    generate_answer,
+    using_remote_ai,
+)
 
 from business_rules import deterministic_business_answer
 
@@ -24,17 +30,37 @@ st.set_page_config(
 
 PROJECT_DIR = Path(__file__).resolve().parent
 DB_DIR = str(PROJECT_DIR / "chroma_db")
-UPLOAD_DIR = PROJECT_DIR / "data" / "uploaded_reports"
+UPLOAD_ROOT = PROJECT_DIR / "data" / "uploaded_reports"
 
 CHAT_MODEL = "qwen2.5:3b"
 EMBED_MODEL = "nomic-embed-text"
+CLOUD_MODE = using_remote_ai()
 
+# Keep a stable identifier for this visitor across Streamlit reruns.
+if "nexus_session_id" not in st.session_state:
+    st.session_state["nexus_session_id"] = hashlib.sha256(
+        os.urandom(32)
+    ).hexdigest()[:24]
+SESSION_ID = st.session_state["nexus_session_id"]
+
+# Isolate each cloud visitor's uploaded files and vector collection.
+UPLOAD_DIR = UPLOAD_ROOT / SESSION_ID if CLOUD_MODE else UPLOAD_ROOT
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-client = chromadb.PersistentClient(path=DB_DIR)
 
+@st.cache_resource(show_spinner=False)
+def get_chroma_client(cloud_mode: bool, db_dir: str):
+    if cloud_mode:
+        return chromadb.EphemeralClient()
+    return chromadb.PersistentClient(path=db_dir)
+
+
+client = get_chroma_client(CLOUD_MODE, DB_DIR)
+COLLECTION_NAME = (
+    f"business_reports_{SESSION_ID}" if CLOUD_MODE else "business_reports"
+)
 collection = client.get_or_create_collection(
-    name="business_reports",
+    name=COLLECTION_NAME,
     metadata={"hnsw:space": "cosine"},
 )
 
@@ -404,12 +430,12 @@ def read_document(path):
     return pages
 
 
-def embed_texts(texts):
-    response = ollama.embed(
-        model=EMBED_MODEL,
-        input=texts,
+def embed_texts(texts, task_type="RETRIEVAL_DOCUMENT"):
+    return backend_embed_texts(
+        texts,
+        local_model=EMBED_MODEL,
+        task_type=task_type,
     )
-    return response["embeddings"]
 
 
 def index_document(path):
@@ -428,6 +454,12 @@ def index_document(path):
 
     if not chunks:
         return 0
+
+    if CLOUD_MODE and len(chunks) > 100:
+        raise ValueError(
+            "This public demo is limited to 100 text chunks per document. "
+            "Use a shorter sample report."
+        )
 
     file_key = hashlib.sha256(
         path.name.encode("utf-8")
@@ -522,7 +554,7 @@ def answer_question(question, top_k=4):
             [],
         )
 
-    question_embedding = embed_texts([question])[0]
+    question_embedding = embed_texts([question], task_type="RETRIEVAL_QUERY")[0]
 
     results = collection.query(
         query_embeddings=[question_embedding],
@@ -597,36 +629,27 @@ def answer_question(question, top_k=4):
 
     context = "\n\n".join(context_parts)
 
-    response = ollama.chat(
-        model=CHAT_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": """
+    system_prompt = """
 You are Nexus AI, a careful business analyst.
 
 Answer using only the supplied evidence.
-
 - Never invent facts, numbers, or explanations.
 - Compare relevant figures before drawing conclusions.
 - If evidence is insufficient, say so clearly.
 - Cite source filenames and page/chunk identifiers.
 - Distinguish facts from interpretations.
 - Be concise and professional.
-""",
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Retrieved evidence:\n{context}\n\n"
-                    f"Question: {question}"
-                ),
-            },
-        ],
-        options={"temperature": 0},
+"""
+    user_prompt = (
+        f"Retrieved evidence:\n{context}\n\n"
+        f"Question: {question}"
     )
-
-    return response["message"]["content"].strip(), citations
+    answer = generate_answer(
+        system_prompt,
+        user_prompt,
+        local_model=CHAT_MODEL,
+    )
+    return answer.strip(), citations
 
 
 # =========================================================
@@ -638,6 +661,9 @@ if "messages" not in st.session_state:
 
 if "pending_question" not in st.session_state:
     st.session_state.pending_question = None
+
+if "nexus_question_count" not in st.session_state:
+    st.session_state.nexus_question_count = 0
 
 
 # =========================================================
@@ -682,7 +708,8 @@ with st.sidebar:
     ):
         if not uploaded_files:
             st.warning("Please upload at least one document.")
-
+        elif CLOUD_MODE and len(uploaded_files) > 3:
+            st.warning("The public demo accepts up to 3 documents per indexing batch.")
         else:
             progress = st.progress(0)
             indexed_count = 0
@@ -773,14 +800,23 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    st.caption("Local AI document intelligence.")
+    st.caption(
+        "Gemini-powered cloud demo." if CLOUD_MODE
+        else "Local AI document intelligence."
+    )
 
+    privacy_note = (
+        "This public demo uses a hosted AI API. Use sample or fictional "
+        "reports only; do not upload confidential information."
+        if CLOUD_MODE
+        else "Your language model and vector database run locally. "
+             "Verify important findings against source documents."
+    )
     st.markdown(
-        """
+        f"""
         <div class="sidebar-note">
           <b>✦ Privacy-aware workspace</b><br>
-          Your language model and vector database run locally.
-          Verify important findings against their source documents.
+          {html.escape(privacy_note)}
         </div>
         """,
         unsafe_allow_html=True,
@@ -807,10 +843,11 @@ with header_left:
     )
 
 with header_right:
+    mode_label = "GEMINI API" if CLOUD_MODE else "LOCAL AI"
     st.markdown(
-        """
+        f"""
         <div style="text-align:right;padding-top:5px">
-          <span class="local-pill">● LOCAL AI</span>
+          <span class="local-pill">● {mode_label}</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -938,6 +975,15 @@ if st.session_state.pending_question is not None:
     st.session_state.pending_question = None
 
 if question:
+    if CLOUD_MODE and st.session_state.nexus_question_count >= 25:
+        st.warning(
+            "This public demo is limited to 25 questions per session. "
+            "Start a new session later if you need to continue."
+        )
+        st.stop()
+
+    if CLOUD_MODE:
+        st.session_state.nexus_question_count += 1
 
     st.session_state.messages.append({
         "role": "user",
@@ -985,15 +1031,21 @@ if question:
 
         except Exception as error:
             st.error(f"Unable to generate an answer: {error}")
-            st.caption(
-                "Check that Ollama is running, both models are "
-                "installed, and business_rules.py is available."
-            )
+            if CLOUD_MODE:
+                st.caption(
+                    "Check that GEMINI_API_KEY is configured in Streamlit "
+                    "Secrets and that the Gemini API quota is available."
+                )
+            else:
+                st.caption(
+                    "Check that Ollama is running, both models are "
+                    "installed, and business_rules.py is available."
+                )
 
 st.markdown(
     """
     <div class="footer-note">
-      NEXUS AI · LOCAL DOCUMENT INTELLIGENCE<br>
+      NEXUS AI · DOCUMENT INTELLIGENCE<br>
       AI-generated answers may be incorrect. Verify important findings.
     </div>
     """,
